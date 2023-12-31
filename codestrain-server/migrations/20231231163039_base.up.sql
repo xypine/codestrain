@@ -1,0 +1,32 @@
+-- Add up migration script here
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (email)
+);
+
+CREATE TABLE IF NOT EXISTS strains (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    creator_id INTEGER NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (creator_id) REFERENCES users(id),
+    UNIQUE (name, creator_id)
+);
+
+CREATE TABLE IF NOT EXISTS strain_versions (
+    id SERIAL PRIMARY KEY,
+    strain_id INTEGER NOT NULL,
+    version INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    wasm bytea NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (strain_id) REFERENCES strains(id),
+    UNIQUE (strain_id, version)
+);

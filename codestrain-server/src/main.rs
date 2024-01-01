@@ -243,29 +243,16 @@ async fn logout(mut db: Connection<Db>, credentials: Json<PublicSession>) -> Coo
     Ok(())
 }
 
-#[rocket::post("/me", data = "<credentials>")]
+#[rocket::get("/me")]
 async fn validate_session(
     mut db: Connection<Db>,
-    credentials: Json<PublicSession>,
+    auth: Credential<OAuth>,
 ) -> Result<Json<User>, LoginError> {
-    // Validate user credentials
-    let r = sqlx::query_as!(
-        User,
-        r#"
-        SELECT users.id, users.name, users.email, users.password, users.created_at, users.updated_at
-        FROM users
-        INNER JOIN sessions ON sessions.user_id = users.id
-        WHERE sessions.token = $1 AND sessions.expires_at > NOW()
-        "#,
-        credentials.token
-    )
-    .fetch_optional(&mut **db)
-    .await?;
+    let user = get_user_from_token(&mut db, &auth.token)
+        .await
+        .ok_or(LoginError::InvalidCredentials)?;
 
-    match r {
-        Some(user) => Ok(Json(user)),
-        None => Err(LoginError::InvalidCredentials),
-    }
+    Ok(Json(user))
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
@@ -359,6 +346,9 @@ async fn new_strain(
     }
 }
 
+use serde_with::base64::Base64;
+use serde_with::serde_as;
+#[serde_as]
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(crate = "rocket::serde")]
 struct StrainVersion {
@@ -367,7 +357,8 @@ struct StrainVersion {
     id: Option<Uuid>,
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     strain_id: Option<Uuid>,
-    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    #[serde_as(as = "Option<Base64>")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     wasm: Option<Vec<u8>>,
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     created_at: Option<PrimitiveDateTime>,
@@ -400,7 +391,6 @@ async fn new_strain_version(
         return Err(LoginError::InvalidCredentials);
     }
     new_strain_version.strain_id = Some(strain_id);
-    new_strain_version.wasm = Some(vec![]);
     let r = sqlx::query!(
         r#"
         INSERT INTO strain_versions (strain_id, code, wasm)
@@ -527,7 +517,7 @@ async fn strain_version(
     let strain_version = sqlx::query_as!(
         StrainVersion,
         r#"
-        SELECT id, strain_id, code, wasm, created_at, updated_at
+        SELECT id, strain_id, code, created_at, updated_at, NULL::bytea AS wasm
         FROM strain_versions
         WHERE id = $1 AND strain_id = $2
         "#,
@@ -540,14 +530,57 @@ async fn strain_version(
     Ok(Json(strain_version))
 }
 
+use extism::*;
+
+#[rocket::get("/strain/<strain_id_str>/version/<version_id_str>/run")]
+async fn strain_version_run(
+    mut db: Connection<Db>,
+    strain_id_str: String,
+    version_id_str: String,
+) -> CoolerResult<String> {
+    let strain_id = Uuid::parse_str(&strain_id_str.to_string()).expect("Invalid strain id");
+    let version_id =
+        Uuid::parse_str(&version_id_str.to_string()).expect("Invalid strain version id");
+    let strain_version = sqlx::query_as!(
+        StrainVersion,
+        r#"
+        SELECT id, strain_id, code, created_at, updated_at, wasm
+        FROM strain_versions
+        WHERE id = $1 AND strain_id = $2
+        "#,
+        version_id,
+        strain_id
+    )
+    .fetch_one(&mut **db)
+    .await?;
+
+    let wasm = strain_version.wasm.expect("No wasm");
+
+    let url = Wasm::data(wasm);
+    let manifest = Manifest::new([url]);
+    let mut plugin = Plugin::new(&manifest, [], true).expect("Failed to load plugin");
+
+    let res = plugin
+        .call::<&str, &str>("count_vowels", "Hello, world!")
+        .expect("Failed to call plugin");
+
+    Ok(res.to_owned())
+}
+
+use rocket::data::Limits;
+use rocket::data::ToByteUnit;
+
 #[rocket::launch]
 async fn rocket() -> _ {
     dotenvy::dotenv().ok();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let cors = rocket_cors::CorsOptions::default().to_cors().unwrap();
 
+    let limits = Limits::default().limit("json", 10.mebibytes());
+
     // set database url in config
     let rocket_config = Config::figment()
+        .merge(("limits", limits))
         .merge(("address", "::"))
         .merge(("databases.sqlx.url", database_url))
         .merge(("databases.sqlx.pool_size", 5))
@@ -569,7 +602,8 @@ async fn rocket() -> _ {
                 login,
                 logout,
                 validate_session,
-                strain_version
+                strain_version,
+                strain_version_run
             ],
         )
 }

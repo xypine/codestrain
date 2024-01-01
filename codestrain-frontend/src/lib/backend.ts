@@ -27,7 +27,7 @@ export type Strain = {
 
 export async function get_strains_by_user(user_id: string, custom_fetch?: typeof fetch) {
     const fetch = custom_fetch || window.fetch;
-    const response = await fetch(`${BACKEND_URL}/strain?user_id=${user_id}`);
+    const response = await fetch(`${BACKEND_URL}/strain?creator_id=${user_id}`);
     if(!response.ok) throw new Error(`Failed to fetch strains (${response.status})`);
     return response.json() as Promise<Strain[]>;
 }

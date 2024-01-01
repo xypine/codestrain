@@ -488,9 +488,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codestrain-common"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "codestrain-server"
 version = "0.1.0"
 dependencies = [
+ "codestrain-common",
  "dotenvy",
  "extism",
  "futures",
@@ -499,6 +507,7 @@ dependencies = [
  "rocket_anyhow",
  "rocket_cors",
  "rocket_db_pools",
+ "serde_json",
  "serde_with",
  "sqlx",
  "thiserror",
@@ -1029,8 +1038,8 @@ checksum = "a36960112da6c1bb7a3337c4ea3c482695cb747382621bfdad8280f3aed5f2ff"
 dependencies = [
  "anyhow",
  "cbindgen",
- "extism-convert",
- "extism-manifest",
+ "extism-convert 1.0.0-rc7",
+ "extism-manifest 1.0.0-rc7",
  "glob",
  "libc",
  "serde",
@@ -1044,6 +1053,20 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wasmtime-wasi",
+]
+
+[[package]]
+name = "extism-convert"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74ab6cd70509e6d74b7c3587f823a2061cfb65b111b4173bd882858eaa87e4a3"
+dependencies = [
+ "anyhow",
+ "base64 0.21.5",
+ "prost",
+ "rmp-serde",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1063,6 +1086,16 @@ dependencies = [
 
 [[package]]
 name = "extism-manifest"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22b0e600ec289630715ffdc11aca36a26297c3ab7908f14d5bbf3770d102bce7"
+dependencies = [
+ "base64 0.21.5",
+ "serde",
+]
+
+[[package]]
+name = "extism-manifest"
 version = "1.0.0-rc7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65c5de2e010ef858cf0a6a876aa135fedd323b07cdfa8a24c04e8971e9f4d41a"
@@ -1070,6 +1103,32 @@ dependencies = [
  "base64 0.21.5",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "extism-pdk"
+version = "1.0.0-rc1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ef5a26316dcd0a963eb9904675417c39a1fcf25d4630385a5a1099f7f123458"
+dependencies = [
+ "anyhow",
+ "base64 0.21.5",
+ "extism-convert 0.2.0",
+ "extism-manifest 0.5.0",
+ "extism-pdk-derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "extism-pdk-derive"
+version = "1.0.0-rc1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5640b8d57f1900efc413c8c608c1ec86dbb623df73de0b151e7debc5c9aaccfd"
+dependencies = [
+ "proc-macro2 1.0.73",
+ "quote 1.0.34",
+ "syn 2.0.44",
 ]
 
 [[package]]
@@ -1114,6 +1173,14 @@ name = "finl_unicode"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fcfdc7a0362c9f4444381a9e697c79d435fe65b52a37466fc2c1184cee9edc6"
+
+[[package]]
+name = "first_choice"
+version = "0.1.0"
+dependencies = [
+ "codestrain-common",
+ "extism-pdk",
+]
 
 [[package]]
 name = "flate2"

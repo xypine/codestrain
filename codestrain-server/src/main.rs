@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 //use extism::*;
 use rocket::fairing::AdHoc;
 use rocket::http::Status;
@@ -265,12 +267,13 @@ struct Strain {
     creator_id: Option<Uuid>,
 }
 
-#[rocket::get("/strain?<creator_id_str>")]
+#[rocket::get("/strain?<creator_id>")]
 async fn strains(
     mut db: Connection<Db>,
-    creator_id_str: Option<String>,
+    creator_id: Option<String>,
 ) -> CoolerResult<Json<Vec<Strain>>> {
-    let creator_id = creator_id_str.map(|s| Uuid::parse_str(&s).ok()).flatten();
+    let creator_id = creator_id.map(|s| Uuid::parse_str(&s).ok()).flatten();
+    println!("Requested strains for creator {:?}", creator_id);
     let strains = sqlx::query_as!(
         Strain,
         r#"
@@ -530,41 +533,220 @@ async fn strain_version(
     Ok(Json(strain_version))
 }
 
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(crate = "rocket::serde")]
+struct BattleRequest {
+    strain_a: Uuid,
+    strain_b: Uuid,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(crate = "rocket::serde")]
+struct BattleResult {
+    id: Uuid,
+    arena_size: i32,
+    strain_a: Uuid,
+    strain_b: Uuid,
+    winner: Option<Uuid>,
+    score_a: i32,
+    score_b: i32,
+    log: Vec<BattleLog>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(crate = "rocket::serde")]
+struct BattleLog {
+    x: u32,
+    y: u32,
+    last: bool,
+    allowed: bool,
+}
+
 use extism::*;
 
-#[rocket::get("/strain/<strain_id_str>/version/<version_id_str>/run")]
-async fn strain_version_run(
-    mut db: Connection<Db>,
-    strain_id_str: String,
-    version_id_str: String,
-) -> CoolerResult<String> {
-    let strain_id = Uuid::parse_str(&strain_id_str.to_string()).expect("Invalid strain id");
-    let version_id =
-        Uuid::parse_str(&version_id_str.to_string()).expect("Invalid strain version id");
+async fn get_latest_strain_version(
+    db: &mut Connection<Db>,
+    strain_id: Uuid,
+) -> CoolerResult<StrainVersion> {
     let strain_version = sqlx::query_as!(
         StrainVersion,
         r#"
         SELECT id, strain_id, code, created_at, updated_at, wasm
         FROM strain_versions
-        WHERE id = $1 AND strain_id = $2
+        WHERE strain_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
         "#,
-        version_id,
         strain_id
     )
-    .fetch_one(&mut **db)
+    .fetch_one(&mut ***db)
     .await?;
 
-    let wasm = strain_version.wasm.expect("No wasm");
+    Ok(strain_version)
+}
 
-    let url = Wasm::data(wasm);
+#[rocket::post("/battles/request", data = "<battle_request>")]
+async fn battle(
+    mut db: Connection<Db>,
+    battle_request: Json<BattleRequest>,
+    auth: Credential<OAuth>,
+) -> CoolerResult<Json<BattleResult>> {
+    const BOARD_SIZE: usize = 10;
+    let user = get_user_from_token(&mut db, &auth.token)
+        .await
+        .ok_or(LoginError::InvalidCredentials)
+        .expect("Invalid credentials");
+    let battle_id = Uuid::new_v4();
+    println!(
+        "battle{battle_id}| user {} requested a battle between {} and {}",
+        user.id.unwrap(),
+        battle_request.strain_a,
+        battle_request.strain_b
+    );
+    println!("battle{battle_id}| Loading strain versions");
+    let strain_a = get_latest_strain_version(&mut db, battle_request.strain_a).await?;
+    let strain_b = get_latest_strain_version(&mut db, battle_request.strain_b).await?;
+    println!("battle{battle_id}| Loading wasm");
+
+    let wasm_a = strain_a.wasm.expect("No wasm for strain a");
+    let wasm_b = strain_b.wasm.expect("No wasm for strain b");
+
+    let url = Wasm::data(wasm_a);
     let manifest = Manifest::new([url]);
-    let mut plugin = Plugin::new(&manifest, [], true).expect("Failed to load plugin");
+    let mut plugin_a = Plugin::new(&manifest, [], true).expect("Failed to load plugin");
 
-    let res = plugin
-        .call::<&str, &str>("count_vowels", "Hello, world!")
-        .expect("Failed to call plugin");
+    let url = Wasm::data(wasm_b);
+    let manifest = Manifest::new([url]);
+    let mut plugin_b = Plugin::new(&manifest, [], true).expect("Failed to load plugin");
 
-    Ok(res.to_owned())
+    println!("battle{battle_id}| Plugins loaded!");
+
+    // None = empty
+    // Some(true) = player a
+    // Some(false) = player b
+    let mut board: HashMap<(u32, u32), Option<bool>> = HashMap::new();
+    for y in 0..BOARD_SIZE {
+        for x in 0..BOARD_SIZE {
+            board.insert((x as u32, y as u32), None);
+        }
+    }
+
+    let mut winner: Option<Uuid> = None;
+    let mut log = vec![];
+
+    // true = player a
+    // false = player b
+    let mut turn = false;
+    loop {
+        let empty = board
+            .iter()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k)
+            .collect::<HashSet<_>>();
+        let occupied = board
+            .iter()
+            .filter(|(_, v)| v.is_some())
+            .map(|(k, _)| k)
+            .collect::<HashSet<_>>();
+        let allowed = empty
+            .iter()
+            .filter(|(x, y)| {
+                occupied
+                    .iter()
+                    .filter(|(ox, oy)| board.get(&(*ox, *oy)) == Some(&Some(turn)))
+                    .any(|(ox, oy)| (ox.max(x) - ox.min(x)) <= 1 && (oy.max(y) - oy.min(y)) <= 1)
+            })
+            .collect::<HashSet<_>>();
+
+        if empty.len() == 0 {
+            break;
+        }
+        turn = !turn;
+        let active_player = if turn { &mut plugin_a } else { &mut plugin_b };
+        let board_serialized = serde_json::to_string(&board).expect("Failed to serialize board");
+        let input = StrainInput { board, allowed };
+        let response = active_player
+            .call::<&str, &str>("take_turn", &board_serialized)
+            .expect("Failed to call plugin");
+        let response: (u32, u32) =
+            serde_json::from_str(&response).expect("Failed to parse response");
+        if allowed.contains(&&&response) {
+            log.push((response, true));
+            board.insert(response, Some(turn));
+        } else {
+            log.push((response, false));
+            winner = Some(if turn {
+                battle_request.strain_b
+            } else {
+                battle_request.strain_a
+            });
+            break;
+        }
+    }
+
+    let score_a = board
+        .iter()
+        .filter(|(_, v)| v.is_some())
+        .filter(|(_, v)| **v == Some(true))
+        .count() as i32;
+    let score_b = board
+        .iter()
+        .filter(|(_, v)| v.is_some())
+        .filter(|(_, v)| **v == Some(false))
+        .count() as i32;
+
+    // save to db
+    let log = log
+        .iter()
+        .enumerate()
+        .map(|(i, ((x, y), allowed))| BattleLog {
+            x: *x,
+            y: *y,
+            last: i == log.len() - 1,
+            allowed: *allowed,
+        })
+        .collect::<Vec<_>>();
+    sqlx::query!(
+        r#"
+        INSERT INTO battles (id, arena_size, strain_a, strain_b, winner, score_a, score_b)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+        battle_id,
+        BOARD_SIZE as i32,
+        battle_request.strain_a,
+        battle_request.strain_b,
+        winner,
+        score_a,
+        score_b,
+    )
+    .execute(&mut **db)
+    .await?;
+    for log_entry in &log {
+        sqlx::query!(
+            r#"
+            INSERT INTO battle_logs (battle_id, move_x, move_y, last, allowed)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+            battle_id,
+            log_entry.x as i32,
+            log_entry.y as i32,
+            log_entry.last,
+            log_entry.allowed,
+        )
+        .execute(&mut **db)
+        .await?;
+    }
+
+    Ok(Json(BattleResult {
+        id: battle_id,
+        arena_size: BOARD_SIZE as i32,
+        strain_a: battle_request.strain_a,
+        strain_b: battle_request.strain_b,
+        winner,
+        score_a,
+        score_b,
+        log,
+    }))
 }
 
 use rocket::data::Limits;
@@ -603,7 +785,7 @@ async fn rocket() -> _ {
                 logout,
                 validate_session,
                 strain_version,
-                strain_version_run
+                battle
             ],
         )
 }

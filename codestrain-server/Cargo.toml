@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+codestrain-common = { path = "../codestrain-common" }
 dotenvy = "0.15"
 extism = "^1.0.0-rc3"
 futures = "0.3.30"
@@ -14,6 +15,7 @@ rocket-authorization = "1.0"
 rocket_anyhow = "0.1"
 rocket_cors = "0.6"
 rocket_db_pools = { version = "0.1", features = ["sqlx_postgres"] }
+serde_json = "1.0.109"
 serde_with = { version = "3.4", features = ["base64"] }
 sqlx = { version = "0.7", features = [
     "postgres",

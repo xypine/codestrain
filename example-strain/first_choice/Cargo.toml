@@ -1,0 +1,13 @@
+[package]
+name = "first_choice"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+crate_type = ["cdylib"]
+
+[dependencies]
+codestrain-common = { path = "../../codestrain-common" }
+extism-pdk = "1.0.0-rc1"

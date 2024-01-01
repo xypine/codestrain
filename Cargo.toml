@@ -1,5 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "codestrain-common",
     "codestrain-server",
+    "example-strain/first_choice",
 ]

@@ -11,10 +11,12 @@ dotenvy = "0.15"
 extism = "^1.0.0-rc3"
 futures = "0.3.30"
 rocket = { version = "0.5", features = ["json"] }
+rocket-authorization = "1.0.0"
 rocket_anyhow = "0.1.1"
+rocket_cors = "0.6.0"
 rocket_db_pools = { version = "0.1.0", features = ["sqlx_postgres"] }
-sqlx = { version = "0.7", features = [
-    "postgres",
-    "runtime-tokio",
-    "tls-rustls",
-] }
+serde_with = "3.4.0"
+sqlx = { version = "0.7", features = ["postgres", "runtime-tokio", "tls-rustls", "time", "uuid"] }
+thiserror = "1.0"
+time = { version = "0.3.31", features = ["serde-human-readable"] }
+uuid = { version = "1.6.1", features = ["serde"] }

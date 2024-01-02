@@ -25,7 +25,7 @@ export type Strain = {
     updated_at: string;
 }
 
-export async function get_strains_by_user(user_id: string, custom_fetch?: typeof fetch) {
+export async function get_strains(user_id?: string, custom_fetch?: typeof fetch) {
     const fetch = custom_fetch || window.fetch;
     const response = await fetch(`${BACKEND_URL}/strain?creator_id=${user_id}`);
     if(!response.ok) throw new Error(`Failed to fetch strains (${response.status})`);
@@ -71,15 +71,50 @@ export async function create_strain_version(strain_id: string, code: string, was
     return response.json() as Promise<StrainVersionMeta>;
 }
 
-export async function run_strain_version(strain_id: string, version_id: string, token: string, custom_fetch?: typeof fetch) {
+export type BattleMeta = {
+    id: string;
+    arena_size: number;
+    strain_a: string;
+    strain_b: string;
+    winner: string | null;
+    score_a: number;
+    score_b: number;
+}
+export type BattleResult = BattleMeta & {
+    log: {
+        x: number;
+        y: number;
+        last: boolean;
+        allowed: boolean;
+    }[];
+}
+
+export async function request_battle(strain_a: string, strain_b: string, token: string, custom_fetch?: typeof fetch) {
     const fetch = custom_fetch || window.fetch;
-    const response = await fetch(`${BACKEND_URL}/strain/${strain_id}/version/${version_id}/run`, {
+    const response = await fetch(`${BACKEND_URL}/battle`, {
+        method: 'POST',
         headers: {
+            'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
         },
+        body: JSON.stringify({strain_a, strain_b})
     });
-    if(!response.ok) throw new Error(`Failed to create strain version (${response.status})`);
-    return response.text() as Promise<string>;
+    if(!response.ok) throw new Error(`Failed to request battle (${response.status})`);
+    return response.json() as Promise<BattleResult>;
+}
+
+export async function get_battle(id: string, custom_fetch?: typeof fetch) {
+    const fetch = custom_fetch || window.fetch;
+    const response = await fetch(`${BACKEND_URL}/battle/${id}`);
+    if(!response.ok) throw new Error(`Failed to fetch battle (${response.status})`);
+    return response.json() as Promise<BattleResult>;
+}
+
+export async function get_battles(custom_fetch?: typeof fetch) {
+    const fetch = custom_fetch || window.fetch;
+    const response = await fetch(`${BACKEND_URL}/battle`);
+    if(!response.ok) throw new Error(`Failed to fetch battles (${response.status})`);
+    return response.json() as Promise<BattleMeta[]>;
 }
 
 export type StrainVersionMeta = {

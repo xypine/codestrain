@@ -1,4 +1,4 @@
-import { create_strain_version, delete_strain, run_strain_version } from '$lib/backend';
+import { create_strain_version, delete_strain } from '$lib/backend';
 import { fail, redirect } from '@sveltejs/kit';
 import type { Actions } from './$types';
 
@@ -29,34 +29,6 @@ export const actions = {
         }
         throw redirect(302, `/strain/${params.id}?version=${result.id}`);
 	},
-    run_version: async ({request, cookies, fetch, params}) => {
-        // TODO run strain version
-        const data = await request.formData();
-        const strain_id = params.id;
-        const version_id = data.get('version_id');
-
-        if(!version_id) {
-            return fail(400, {
-                message: 'version_id is required',
-                error: true
-            });
-        }
-
-        let result;
-        try {
-            result = await run_strain_version(strain_id, version_id + "", cookies.get('session')!, fetch);
-        }
-        catch(e) {
-            console.error(e);
-            return fail(500, {
-                message: 'Failed run strain version',
-                error: true
-            });
-        }
-        return {
-            result
-        }
-    },
     delete: async ({cookies, fetch, params}) => {
         try {
             await delete_strain(params.id, cookies.get('session')!, fetch);

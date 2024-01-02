@@ -19,6 +19,9 @@
 				<a href="/register">Register</a>
 			</li>
 		{/if}
+		<li>
+			<a href="/battle">Battles</a>
+		</li>
 	</ul>
 </nav>
 <slot />

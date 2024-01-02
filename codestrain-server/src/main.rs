@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use codestrain_common::*;
 
-//use extism::*;
+use extism::*;
 use rocket::fairing::AdHoc;
 use rocket::http::Status;
 use rocket::response::status::Created;
@@ -263,6 +263,7 @@ struct Strain {
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     id: Option<Uuid>,
     name: String,
+    description: Option<String>,
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     creator_id: Option<Uuid>,
 }
@@ -273,11 +274,10 @@ async fn strains(
     creator_id: Option<String>,
 ) -> CoolerResult<Json<Vec<Strain>>> {
     let creator_id = creator_id.map(|s| Uuid::parse_str(&s).ok()).flatten();
-    println!("Requested strains for creator {:?}", creator_id);
     let strains = sqlx::query_as!(
         Strain,
         r#"
-        SELECT id, name, creator_id
+        SELECT id, name, creator_id, description
         FROM strains
         WHERE creator_id = $1 OR $1 IS NULL
         ORDER BY updated_at DESC
@@ -321,11 +321,12 @@ async fn new_strain(
     new_strain.creator_id = Some(user.id.unwrap());
     let r = sqlx::query!(
         r#"
-        INSERT INTO strains (name, creator_id)
-        VALUES ($1, $2)
+        INSERT INTO strains (name, description, creator_id)
+        VALUES ($1, $2, $3)
         RETURNING id
         "#,
         new_strain.name,
+        new_strain.description,
         new_strain.creator_id,
     )
     .fetch_optional(&mut **db)
@@ -556,13 +557,11 @@ struct BattleResult {
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(crate = "rocket::serde")]
 struct BattleLog {
-    x: u32,
-    y: u32,
+    x: i32,
+    y: i32,
     last: bool,
     allowed: bool,
 }
-
-use extism::*;
 
 async fn get_latest_strain_version(
     db: &mut Connection<Db>,
@@ -585,7 +584,7 @@ async fn get_latest_strain_version(
     Ok(strain_version)
 }
 
-#[rocket::post("/battles/request", data = "<battle_request>")]
+#[rocket::post("/battle", data = "<battle_request>")]
 async fn battle(
     mut db: Connection<Db>,
     battle_request: Json<BattleRequest>,
@@ -606,6 +605,45 @@ async fn battle(
     println!("battle{battle_id}| Loading strain versions");
     let strain_a = get_latest_strain_version(&mut db, battle_request.strain_a).await?;
     let strain_b = get_latest_strain_version(&mut db, battle_request.strain_b).await?;
+    // check for existing result
+    let row = sqlx::query!(
+        r#"
+        SELECT id, arena_size, strain_a, strain_b, winner, score_a, score_b
+        FROM battles
+        WHERE strain_a = $1 AND strain_b = $2
+        "#,
+        battle_request.strain_a,
+        battle_request.strain_b
+    )
+    .fetch_optional(&mut **db)
+    .await?;
+    if let Some(row) = row {
+        println!("battle{battle_id}| Battle already exists");
+        let log = sqlx::query_as!(
+            BattleLog,
+            r#"
+            SELECT move_x AS x, move_y AS y, last, allowed
+            FROM battle_logs
+            WHERE battle_id = $1
+            ORDER BY turn ASC
+            "#,
+            battle_id
+        )
+        .fetch(&mut **db)
+        .try_collect::<Vec<_>>()
+        .await?;
+        return Ok(Json(BattleResult {
+            id: row.id,
+            arena_size: row.arena_size,
+            strain_a: row.strain_a,
+            strain_b: row.strain_b,
+            winner: row.winner,
+            score_a: row.score_a,
+            score_b: row.score_b,
+            log,
+        }));
+    }
+
     println!("battle{battle_id}| Loading wasm");
 
     let wasm_a = strain_a.wasm.expect("No wasm for strain a");
@@ -624,10 +662,17 @@ async fn battle(
     // None = empty
     // Some(true) = player a
     // Some(false) = player b
-    let mut board: HashMap<(u32, u32), Option<bool>> = HashMap::new();
+    let mut board = vec![];
     for y in 0..BOARD_SIZE {
         for x in 0..BOARD_SIZE {
-            board.insert((x as u32, y as u32), None);
+            let value = if x == 0 && y == 0 {
+                Some(true)
+            } else if x == BOARD_SIZE - 1 && y == BOARD_SIZE - 1 {
+                Some(false)
+            } else {
+                None
+            };
+            board.push(((x as i32, y as i32), value));
         }
     }
 
@@ -637,71 +682,134 @@ async fn battle(
     // true = player a
     // false = player b
     let mut turn = false;
+    let mut skips = 0;
     loop {
+        turn = !turn;
         let empty = board
             .iter()
             .filter(|(_, v)| v.is_none())
-            .map(|(k, _)| k)
-            .collect::<HashSet<_>>();
+            .map(|(k, _)| *k)
+            .collect::<Vec<_>>();
         let occupied = board
             .iter()
             .filter(|(_, v)| v.is_some())
-            .map(|(k, _)| k)
-            .collect::<HashSet<_>>();
-        let allowed = empty
+            .map(|(k, v)| (*k, *v))
+            .collect::<Vec<_>>();
+        // Only allow moves that are directly adjacent to an occupied square (no diagonals) and are the same color
+        let mut allowed = empty
             .iter()
             .filter(|(x, y)| {
                 occupied
                     .iter()
-                    .filter(|(ox, oy)| board.get(&(*ox, *oy)) == Some(&Some(turn)))
-                    .any(|(ox, oy)| (ox.max(x) - ox.min(x)) <= 1 && (oy.max(y) - oy.min(y)) <= 1)
+                    .filter(|(_, v)| *v == Some(turn))
+                    .any(|((ox, oy), _)| {
+                        false
+                            || (ox == &(x - 1) && oy == y)
+                            || (ox == &(x + 1) && oy == y)
+                            || (ox == x && oy == &(y - 1))
+                            || (ox == x && oy == &(y + 1))
+                    })
             })
-            .collect::<HashSet<_>>();
-
-        if empty.len() == 0 {
-            break;
+            .map(|(x, y)| (*x, *y))
+            .collect::<Vec<_>>();
+        if !turn {
+            allowed.reverse();
         }
-        turn = !turn;
+        println!(
+            "battle{battle_id}| Turn: {}, Allowed moves: {:?}",
+            if turn { "A" } else { "B" },
+            allowed
+        );
+        if allowed.len() == 0 {
+            if skips == 1 {
+                println!("battle{battle_id}| Both players skipped, ending game");
+                break;
+            }
+            // rotate the board so that the active player is always at the top left
+            board = board
+                .iter()
+                .map(|((x, y), v)| {
+                    (
+                        ((BOARD_SIZE as i32 - 1) - y, (BOARD_SIZE as i32 - 1) - x),
+                        *v,
+                    )
+                })
+                .collect::<Vec<_>>();
+            skips += 1;
+            continue;
+        }
+        skips = 0;
         let active_player = if turn { &mut plugin_a } else { &mut plugin_b };
-        let board_serialized = serde_json::to_string(&board).expect("Failed to serialize board");
-        let input = StrainInput { board, allowed };
-        let response = active_player
-            .call::<&str, &str>("take_turn", &board_serialized)
+        let input = StrainInput {
+            board: board.clone(),
+            allowed: allowed.clone(),
+        };
+        //let json = serde_json::to_string(&input).expect("Failed to serialize input");
+        //println!("battle{battle_id}| Sending input to plugin: {}", json);
+        let extism::convert::Json(response) = active_player
+            .call::<extism::convert::Json<StrainInput>, extism::convert::Json<StrainOutput>>(
+                "take_turn",
+                extism::convert::Json(input),
+            )
             .expect("Failed to call plugin");
-        let response: (u32, u32) =
-            serde_json::from_str(&response).expect("Failed to parse response");
-        if allowed.contains(&&&response) {
-            log.push((response, true));
-            board.insert(response, Some(turn));
+
+        // rotate the response so that it matches the original board
+        let corrected_response: StrainOutput = if !turn {
+            (
+                (BOARD_SIZE as i32 - 1) - response.1,
+                (BOARD_SIZE as i32 - 1) - response.0,
+            )
         } else {
-            log.push((response, false));
+            response
+        };
+
+        if allowed.contains(&response) {
+            log.push((corrected_response, true));
+            board
+                .iter_mut()
+                .filter(|(k, _)| *k == response)
+                .for_each(|(_, v)| *v = Some(turn));
+        } else {
+            log.push((corrected_response, false));
             winner = Some(if turn {
-                battle_request.strain_b
+                strain_b.id.unwrap()
             } else {
-                battle_request.strain_a
+                strain_a.id.unwrap()
             });
             break;
         }
+
+        // rotate the board so that the active player is always at the top left
+        board = board
+            .iter()
+            .map(|((x, y), v)| {
+                (
+                    ((BOARD_SIZE as i32 - 1) - y, (BOARD_SIZE as i32 - 1) - x),
+                    *v,
+                )
+            })
+            .collect::<Vec<_>>();
     }
 
-    let score_a = board
-        .iter()
-        .filter(|(_, v)| v.is_some())
-        .filter(|(_, v)| **v == Some(true))
-        .count() as i32;
-    let score_b = board
-        .iter()
-        .filter(|(_, v)| v.is_some())
-        .filter(|(_, v)| **v == Some(false))
-        .count() as i32;
+    let score_a = board.iter().filter(|(_, v)| *v == Some(true)).count() as i32;
+    let score_b = board.iter().filter(|(_, v)| *v == Some(false)).count() as i32;
+    let winner = winner.or_else(|| {
+        if score_a > score_b {
+            Some(strain_a.id.unwrap())
+        } else if score_b > score_a {
+            Some(strain_b.id.unwrap())
+        } else {
+            None
+        }
+    });
 
     // save to db
     let log = log
         .iter()
         .enumerate()
         .map(|(i, ((x, y), allowed))| BattleLog {
-            x: *x,
-            y: *y,
+            x: *x as i32,
+            y: *y as i32,
             last: i == log.len() - 1,
             allowed: *allowed,
         })
@@ -713,23 +821,24 @@ async fn battle(
         "#,
         battle_id,
         BOARD_SIZE as i32,
-        battle_request.strain_a,
-        battle_request.strain_b,
+        strain_a.id,
+        strain_b.id,
         winner,
         score_a,
         score_b,
     )
     .execute(&mut **db)
     .await?;
-    for log_entry in &log {
+    for (turn, log_entry) in log.iter().enumerate() {
         sqlx::query!(
             r#"
-            INSERT INTO battle_logs (battle_id, move_x, move_y, last, allowed)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO battle_logs (battle_id, turn, move_x, move_y, last, allowed)
+            VALUES ($1, $2, $3, $4, $5, $6)
             "#,
             battle_id,
-            log_entry.x as i32,
-            log_entry.y as i32,
+            turn as i32,
+            log_entry.x,
+            log_entry.y,
             log_entry.last,
             log_entry.allowed,
         )
@@ -740,13 +849,84 @@ async fn battle(
     Ok(Json(BattleResult {
         id: battle_id,
         arena_size: BOARD_SIZE as i32,
-        strain_a: battle_request.strain_a,
-        strain_b: battle_request.strain_b,
+        strain_a: strain_a.id.unwrap(),
+        strain_b: strain_b.id.unwrap(),
         winner,
         score_a,
         score_b,
         log,
     }))
+}
+
+#[rocket::get("/battle/<battle_id_str>")]
+async fn get_battle(
+    mut db: Connection<Db>,
+    battle_id_str: String,
+) -> CoolerResult<Json<BattleResult>> {
+    let battle_id = Uuid::parse_str(&battle_id_str.to_string()).expect("Invalid battle id");
+    let row = sqlx::query!(
+        r#"
+        SELECT id, arena_size, strain_a, strain_b, winner, score_a, score_b
+        FROM battles
+        WHERE id = $1
+        "#,
+        battle_id
+    )
+    .fetch_one(&mut **db)
+    .await?;
+    let log = sqlx::query_as!(
+        BattleLog,
+        r#"
+        SELECT move_x AS x, move_y AS y, last, allowed
+        FROM battle_logs
+        WHERE battle_id = $1
+        ORDER BY turn ASC
+        "#,
+        battle_id
+    )
+    .fetch(&mut **db)
+    .try_collect::<Vec<_>>()
+    .await?;
+
+    Ok(Json(BattleResult {
+        id: row.id,
+        arena_size: row.arena_size,
+        strain_a: row.strain_a,
+        strain_b: row.strain_b,
+        winner: row.winner,
+        score_a: row.score_a,
+        score_b: row.score_b,
+        log,
+    }))
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(crate = "rocket::serde")]
+struct BattleIndex {
+    id: Uuid,
+    arena_size: i32,
+    strain_a: Uuid,
+    strain_b: Uuid,
+    winner: Option<Uuid>,
+    score_a: i32,
+    score_b: i32,
+}
+
+#[rocket::get("/battle")]
+async fn battles(mut db: Connection<Db>) -> CoolerResult<Json<Vec<BattleIndex>>> {
+    let battles = sqlx::query_as!(
+        BattleIndex,
+        r#"
+        SELECT battles.id, arena_size, strain_a, strain_b, winner, score_a, score_b
+        FROM battles
+        ORDER BY created_at DESC
+        "#
+    )
+    .fetch(&mut **db)
+    .try_collect::<Vec<_>>()
+    .await?;
+
+    Ok(Json(battles))
 }
 
 use rocket::data::Limits;
@@ -785,7 +965,9 @@ async fn rocket() -> _ {
                 logout,
                 validate_session,
                 strain_version,
-                battle
+                battle,
+                get_battle,
+                battles
             ],
         )
 }

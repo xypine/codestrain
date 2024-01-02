@@ -1,9 +1,9 @@
-use std::collections::HashSet;
-
+use codestrain_common::*;
 use extism_pdk::*;
 
 #[plugin_fn]
-pub fn take_turn(board_str: &str) -> FnResult<String> {
-    let board: HashSet<(u32, u32)> = serde_json::from_str(board_str).expect("invalid board");
-    Ok(format!("Hello, {}!", name))
+pub fn take_turn(Json(input): Json<StrainInput>) -> FnResult<Json<StrainOutput>> {
+    let allowed = input.allowed;
+    let first = allowed.first().expect("No allowed moves!");
+    Ok(Json(*first))
 }

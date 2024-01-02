@@ -2,11 +2,11 @@
 CREATE TABLE IF NOT EXISTS battles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     arena_size INT NOT NULL,
-    strain_a UUID NOT NULL REFERENCES strain_versions(id) ON DELETE CASCADE,
-    strain_b UUID NOT NULL REFERENCES strain_versions(id) ON DELETE CASCADE,
+    strain_a UUID NOT NULL REFERENCES strains(id) ON DELETE CASCADE,
+    strain_b UUID NOT NULL REFERENCES strains(id) ON DELETE CASCADE,
     score_a INT NOT NULL,
     score_b INT NOT NULL,
-    winner UUID REFERENCES strain_versions(id) ON DELETE CASCADE,
+    winner UUID REFERENCES strains(id) ON DELETE CASCADE,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE (strain_a, strain_b, arena_size)
 );

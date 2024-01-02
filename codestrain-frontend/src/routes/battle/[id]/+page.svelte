@@ -1,5 +1,8 @@
 <script lang="ts">
 	const { data } = $props();
+	let strain_a_name = $state(data.strain_a.name);
+	let strain_b_name = $state(data.strain_b.name);
+
 	const board_size = data.battle.arena_size;
 	type Cell = null | {
 		player: 'a' | 'b';
@@ -27,10 +30,19 @@
 </script>
 
 <main>
-	<h1>Battle – {data.battle.strain_a} vs. {data.battle.strain_b}</h1>
+	<h2>
+		<span class="a">{strain_a_name}</span> vs. <span class="b">{strain_b_name}</span>
+	</h2>
 	<h2>Results</h2>
 	{#if data.battle.winner}
-		<h3>Winner: {data.battle.winner}</h3>
+		<h3>
+			Winner:
+			{#if data.battle.winner === data.battle.strain_a}
+				{strain_a_name}
+			{:else}
+				{strain_b_name}
+			{/if}
+		</h3>
 	{:else}
 		<h3>Draw</h3>
 	{/if}
@@ -42,7 +54,7 @@
 		{#each board as row}
 			<div class="row">
 				{#each row as cell}
-					<div class="cell">
+					<div class={`cell ${cell.turn <= turn && cell?.player}`}>
 						{#if cell && cell.turn <= turn}
 							{cell.player}
 						{/if}
@@ -52,11 +64,11 @@
 		{/each}
 	</div>
 	<input type="range" min="0" max={data.battle.log.length} bind:value={turn} />
-	<p>Turn {turn}</p>
-	<p>{data.battle.log.length} moves in total</p>
+	<p>Turn {turn} / {data.battle.log.length}</p>
+	<!--
 	{#each data.battle.log as move}
 		<p>{JSON.stringify(move)}</p>
-	{/each}
+	{/each}-->
 </main>
 
 <style>
@@ -71,10 +83,18 @@
 	.cell {
 		width: 20px;
 		height: 20px;
-		border: 1px solid black;
+		border: 1px solid #0004;
 
 		display: flex;
 		justify-content: center;
 		align-items: center;
+	}
+	.a {
+		color: #ff0000;
+		background-color: #ff00000f;
+	}
+	.b {
+		color: #0000ff;
+		background-color: #0000ff0f;
 	}
 </style>

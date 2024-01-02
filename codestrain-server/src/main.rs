@@ -16,6 +16,8 @@ use thiserror::Error;
 use time::PrimitiveDateTime;
 use uuid::Uuid;
 
+use serde_with::serde_as;
+
 #[derive(Database)]
 #[database("sqlx")]
 struct Db(sqlx::Pool<sqlx::Postgres>);
@@ -257,6 +259,8 @@ async fn validate_session(
     Ok(Json(user))
 }
 
+use serde_with::base64::Base64;
+use serde_with::As;
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(crate = "rocket::serde")]
 struct Strain {
@@ -266,6 +270,17 @@ struct Strain {
     description: Option<String>,
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     creator_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(with = "As::<Option<Base64>>")]
+    wasm: Option<Vec<u8>>,
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    wasm_hash: Option<String>,
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    created_at: Option<PrimitiveDateTime>,
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    updated_at: Option<PrimitiveDateTime>,
 }
 
 #[rocket::get("/strain?<creator_id>")]
@@ -277,7 +292,7 @@ async fn strains(
     let strains = sqlx::query_as!(
         Strain,
         r#"
-        SELECT id, name, creator_id, description
+        SELECT id, name, description, creator_id, NULL AS code, NULL::bytea AS wasm, created_at, updated_at, wasm_hash
         FROM strains
         WHERE creator_id = $1 OR $1 IS NULL
         ORDER BY updated_at DESC
@@ -309,25 +324,56 @@ async fn get_user_from_token(db: &mut Connection<Db>, token: &str) -> Option<Use
     r
 }
 
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum NewStrainError {
+    #[error("Invalid credentials")]
+    InvalidCredentials,
+    #[error("Constraint violated")]
+    ConstraintViolated,
+    #[error("Internal error")]
+    InternalError,
+}
+impl<'r, 'o: 'r> rocket::response::Responder<'r, 'o> for NewStrainError {
+    fn respond_to(self, req: &'r rocket::Request<'_>) -> rocket::response::Result<'o> {
+        println!("{:?}", self);
+
+        match self {
+            Self::InvalidCredentials => Status::Unauthorized,
+            Self::ConstraintViolated => Status::Conflict,
+            _ => Status::InternalServerError,
+        }
+        .respond_to(req)
+    }
+}
+use sha2::Digest;
 #[rocket::post("/strain", data = "<new_strain>")]
 async fn new_strain(
     mut db: Connection<Db>,
     mut new_strain: Json<Strain>,
     auth: Credential<OAuth>,
-) -> Result<Created<Json<Strain>>, NewUserError> {
+) -> Result<Created<Json<Strain>>, NewStrainError> {
     let user = get_user_from_token(&mut db, &auth.token)
         .await
-        .ok_or(NewUserError::InternalError)?;
+        .ok_or(NewStrainError::InvalidCredentials)?;
     new_strain.creator_id = Some(user.id.unwrap());
+    new_strain.wasm_hash = Some(
+        sha2::Sha256::digest(&new_strain.wasm.as_ref().unwrap())
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>(),
+    );
     let r = sqlx::query!(
         r#"
-        INSERT INTO strains (name, description, creator_id)
-        VALUES ($1, $2, $3)
+        INSERT INTO strains (name, description, creator_id, code, wasm, wasm_hash)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
         "#,
         new_strain.name,
         new_strain.description,
         new_strain.creator_id,
+        new_strain.code,
+        new_strain.wasm,
+        new_strain.wasm_hash
     )
     .fetch_optional(&mut **db)
     .await;
@@ -336,98 +382,33 @@ async fn new_strain(
         Ok(Some(row)) => {
             // Set the new user's id from the returned value and return as before
             new_strain.id = Some(row.id);
-            Ok(Created::new("/strain").body(new_strain))
+            // clear code and wasm to save bandwidth
+            new_strain.code = None;
+            new_strain.wasm = None;
+            return Ok(Created::new("/strain").body(new_strain));
         }
         Err(sqlx::Error::Database(e)) => {
             println!("{:?}", e);
             if e.constraint().is_some() {
                 // The constraint was violated, so we know the user already exists
-                return Err(NewUserError::UserExists);
+                return Err(NewStrainError::ConstraintViolated);
             }
-            Err(NewUserError::InternalError)
         }
-        _ => Err(NewUserError::InternalError),
+        _ => {}
     }
-}
-
-use serde_with::base64::Base64;
-use serde_with::serde_as;
-#[serde_as]
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
-#[serde(crate = "rocket::serde")]
-struct StrainVersion {
-    code: String,
-    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
-    id: Option<Uuid>,
-    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
-    strain_id: Option<Uuid>,
-    #[serde_as(as = "Option<Base64>")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    wasm: Option<Vec<u8>>,
-    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
-    created_at: Option<PrimitiveDateTime>,
-    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
-    updated_at: Option<PrimitiveDateTime>,
-}
-
-#[rocket::post("/strain/<strain_id_str>/version", data = "<new_strain_version>")]
-async fn new_strain_version(
-    mut db: Connection<Db>,
-    mut new_strain_version: Json<StrainVersion>,
-    strain_id_str: String,
-    auth: Credential<OAuth>,
-) -> Result<Created<Json<StrainVersion>>, LoginError> {
-    let strain_id = Uuid::parse_str(&strain_id_str).map_err(|_| LoginError::InvalidCredentials)?;
-    let user = get_user_from_token(&mut db, &auth.token)
-        .await
-        .ok_or(LoginError::InvalidCredentials)?;
-    let strain = sqlx::query!(
-        r#"
-        SELECT creator_id
-        FROM strains
-        WHERE id = $1
-        "#,
-        strain_id
-    )
-    .fetch_one(&mut **db)
-    .await?;
-    if user.id.unwrap() != strain.creator_id {
-        return Err(LoginError::InvalidCredentials);
-    }
-    new_strain_version.strain_id = Some(strain_id);
-    let r = sqlx::query!(
-        r#"
-        INSERT INTO strain_versions (strain_id, code, wasm)
-        VALUES ($1, $2, $3)
-        RETURNING id
-        "#,
-        new_strain_version.strain_id,
-        new_strain_version.code,
-        new_strain_version.wasm,
-    )
-    .fetch_one(&mut **db)
-    .await?;
-
-    new_strain_version.id = Some(r.id);
-    Ok(Created::new("/strain_version").body(new_strain_version))
+    Err(NewStrainError::InternalError)
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(crate = "rocket::serde")]
-struct StrainVersionMeta {
-    id: Uuid,
-    strain_id: Uuid,
-    created_at: PrimitiveDateTime,
-    updated_at: PrimitiveDateTime,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
-#[serde(crate = "rocket::serde")]
-struct StrainWithVersionMeta {
+struct StrainWithoutWasm {
     id: Uuid,
     name: String,
+    description: Option<String>,
+    code: String,
+    wasm_hash: String,
+    wasm_size: Option<i32>,
     creator_id: Uuid,
-    versions: Vec<StrainVersionMeta>,
     created_at: PrimitiveDateTime,
     updated_at: PrimitiveDateTime,
 }
@@ -436,11 +417,12 @@ struct StrainWithVersionMeta {
 async fn strain(
     mut db: Connection<Db>,
     strain_id_str: String,
-) -> CoolerResult<Json<StrainWithVersionMeta>> {
+) -> CoolerResult<Json<StrainWithoutWasm>> {
     let strain_id = Uuid::parse_str(&strain_id_str.to_string()).expect("Invalid strain id");
-    let strain = sqlx::query!(
+    let strain = sqlx::query_as!(
+        StrainWithoutWasm,
         r#"
-        SELECT id, name, creator_id, created_at, updated_at
+        SELECT id, name, creator_id, created_at, updated_at, description, code, octet_length(wasm) AS wasm_size, wasm_hash
         FROM strains
         WHERE id = $1
         "#,
@@ -448,28 +430,8 @@ async fn strain(
     )
     .fetch_one(&mut **db)
     .await?;
-    let strain_versions = sqlx::query_as!(
-        StrainVersionMeta,
-        r#"
-        SELECT id, strain_id, created_at, updated_at
-        FROM strain_versions
-        WHERE strain_id = $1
-        ORDER BY created_at DESC
-        "#,
-        strain_id
-    )
-    .fetch(&mut **db)
-    .try_collect::<Vec<_>>()
-    .await?;
 
-    Ok(Json(StrainWithVersionMeta {
-        id: strain.id,
-        name: strain.name,
-        creator_id: strain.creator_id,
-        versions: strain_versions,
-        created_at: strain.created_at,
-        updated_at: strain.updated_at,
-    }))
+    Ok(Json(strain))
 }
 
 #[rocket::delete("/strain/<strain_id_str>")]
@@ -509,31 +471,6 @@ async fn delete_strain(
     Ok(())
 }
 
-#[rocket::get("/strain/<strain_id_str>/version/<version_id_str>")]
-async fn strain_version(
-    mut db: Connection<Db>,
-    strain_id_str: String,
-    version_id_str: String,
-) -> CoolerResult<Json<StrainVersion>> {
-    let strain_id = Uuid::parse_str(&strain_id_str.to_string()).expect("Invalid strain id");
-    let version_id =
-        Uuid::parse_str(&version_id_str.to_string()).expect("Invalid strain version id");
-    let strain_version = sqlx::query_as!(
-        StrainVersion,
-        r#"
-        SELECT id, strain_id, code, created_at, updated_at, NULL::bytea AS wasm
-        FROM strain_versions
-        WHERE id = $1 AND strain_id = $2
-        "#,
-        version_id,
-        strain_id
-    )
-    .fetch_one(&mut **db)
-    .await?;
-
-    Ok(Json(strain_version))
-}
-
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(crate = "rocket::serde")]
 struct BattleRequest {
@@ -566,22 +503,20 @@ struct BattleLog {
 async fn get_latest_strain_version(
     db: &mut Connection<Db>,
     strain_id: Uuid,
-) -> CoolerResult<StrainVersion> {
-    let strain_version = sqlx::query_as!(
-        StrainVersion,
+) -> CoolerResult<Strain> {
+    let strain = sqlx::query_as!(
+        Strain,
         r#"
-        SELECT id, strain_id, code, created_at, updated_at, wasm
-        FROM strain_versions
-        WHERE strain_id = $1
-        ORDER BY created_at DESC
-        LIMIT 1
+        SELECT id, name, description, creator_id, code, wasm, created_at, updated_at, wasm_hash
+        FROM strains
+        WHERE id = $1
         "#,
         strain_id
     )
     .fetch_one(&mut ***db)
     .await?;
 
-    Ok(strain_version)
+    Ok(strain)
 }
 
 #[rocket::post("/battle", data = "<battle_request>")]
@@ -602,9 +537,6 @@ async fn battle(
         battle_request.strain_a,
         battle_request.strain_b
     );
-    println!("battle{battle_id}| Loading strain versions");
-    let strain_a = get_latest_strain_version(&mut db, battle_request.strain_a).await?;
-    let strain_b = get_latest_strain_version(&mut db, battle_request.strain_b).await?;
     // check for existing result
     let row = sqlx::query!(
         r#"
@@ -643,6 +575,9 @@ async fn battle(
             log,
         }));
     }
+    println!("battle{battle_id}| Loading strain versions");
+    let strain_a = get_latest_strain_version(&mut db, battle_request.strain_a).await?;
+    let strain_b = get_latest_strain_version(&mut db, battle_request.strain_b).await?;
 
     println!("battle{battle_id}| Loading wasm");
 
@@ -960,11 +895,9 @@ async fn rocket() -> _ {
                 strains,
                 strain,
                 delete_strain,
-                new_strain_version,
                 login,
                 logout,
                 validate_session,
-                strain_version,
                 battle,
                 get_battle,
                 battles

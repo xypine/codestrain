@@ -7,6 +7,9 @@ export const actions = {
 		// TODO create strain
         const data = await request.formData();
         const name = data.get('name');
+        const description = data.get('description');
+        const code = data.get('code');
+        const wasm = data.get('wasm');
 
         if(!name) {
             return fail(400, {
@@ -15,9 +18,17 @@ export const actions = {
             });
         }
 
+
+        if(!code || !wasm) {
+            return fail(400, {
+                message: 'code and wasm are required',
+                error: true
+            });
+        }
+
         let result;
         try {
-             result = await create_strain(name + "", cookies.get('session')!, fetch);
+             result = await create_strain(name + "", description ? description + "" : null, code + "", wasm + "", cookies.get('session')!, fetch);
         }
         catch(e) {
             console.error(e);

@@ -17,6 +17,7 @@ rocket_cors = "0.6"
 rocket_db_pools = { version = "0.1", features = ["sqlx_postgres"] }
 serde_json = "1.0.109"
 serde_with = { version = "3.4", features = ["base64"] }
+sha2 = "0.10.8"
 sqlx = { version = "0.7", features = [
     "postgres",
     "runtime-tokio",

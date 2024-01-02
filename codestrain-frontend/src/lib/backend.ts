@@ -21,6 +21,7 @@ export type Strain = {
     id: string;
     creator_id: string;
     name: string;
+    description: string | null;
     created_at: string;
     updated_at: string;
 }
@@ -32,15 +33,22 @@ export async function get_strains(user_id?: string, custom_fetch?: typeof fetch)
     return response.json() as Promise<Strain[]>;
 }
 
-export async function create_strain(name: string, token: string, custom_fetch?: typeof fetch) {
+export async function create_strain(name: string, description: string | null, code: string, wasm: string, token: string, custom_fetch?: typeof fetch) {
     const fetch = custom_fetch || window.fetch;
+    const body = {
+        name,
+        description,
+        code,
+        wasm
+    };
+    console.log("body", body);
     const response = await fetch(`${BACKEND_URL}/strain`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({name})
+        body: JSON.stringify(body)
     });
     if(!response.ok) throw new Error(`Failed to create strain (${response.status})`);
     return response.json() as Promise<Strain>;
@@ -55,20 +63,6 @@ export async function delete_strain(id: string, token: string, custom_fetch?: ty
         }
     });
     if(!response.ok) throw new Error(`Failed to delete strain (${response.status})`);
-}
-
-export async function create_strain_version(strain_id: string, code: string, wasm: string, token: string, custom_fetch?: typeof fetch) {
-    const fetch = custom_fetch || window.fetch;
-    const response = await fetch(`${BACKEND_URL}/strain/${strain_id}/version`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({code, wasm})
-    });
-    if(!response.ok) throw new Error(`Failed to create strain version (${response.status})`);
-    return response.json() as Promise<StrainVersionMeta>;
 }
 
 export type BattleMeta = {
@@ -117,31 +111,16 @@ export async function get_battles(custom_fetch?: typeof fetch) {
     return response.json() as Promise<BattleMeta[]>;
 }
 
-export type StrainVersionMeta = {
-    id: string;
-    strain_id: string;
-    created_at: string;
-    updated_at: string;
-}
-
-export type StrainWithVersions = Strain & {
-    versions: StrainVersionMeta[];
+export type StrainWithExtra = Strain & {
+    code: string;
+    wasm_size: number;
+    wasm_hash: string;
 }
 
 
-export async function get_strain_with_versions(id: string, custom_fetch?: typeof fetch) {
+export async function get_strain(id: string, custom_fetch?: typeof fetch) {
     const fetch = custom_fetch || window.fetch;
     const response = await fetch(`${BACKEND_URL}/strain/${id}`);
     if(!response.ok) throw new Error(`Failed to fetch strain (${response.status})`);
-    return response.json() as Promise<StrainWithVersions>;
-}
-
-export type StrainVersion = StrainVersionMeta & {
-    code: string;
-}
-export async function get_strain_version(strain_id: string, id: string, custom_fetch?: typeof fetch) {
-    const fetch = custom_fetch || window.fetch;
-    const response = await fetch(`${BACKEND_URL}/strain/${strain_id}/version/${id}`);
-    if(!response.ok) throw new Error(`Failed to fetch strain version (${response.status})`);
-    return response.json() as Promise<StrainVersion>;
+    return response.json() as Promise<StrainWithExtra>;
 }

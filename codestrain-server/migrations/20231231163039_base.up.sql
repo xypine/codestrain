@@ -11,22 +11,14 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS strains (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(255) NOT NULL,
+    name VARCHAR(60) NOT NULL,
     description TEXT,
-    creator_id UUID NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (creator_id) REFERENCES users(id),
-    UNIQUE (name, creator_id)
-);
-
-CREATE TABLE IF NOT EXISTS strain_versions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    strain_id UUID NOT NULL,
+    creator_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     code TEXT NOT NULL,
     wasm bytea NOT NULL,
+    wasm_hash TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (strain_id) REFERENCES strains(id) ON DELETE CASCADE,
-    UNIQUE (strain_id, code)
+    UNIQUE (name, creator_id),
+    UNIQUE (wasm_hash)
 );

@@ -1,32 +1,13 @@
 <script lang="ts">
+	import Board from '$lib/components/board.svelte';
+
 	const { data } = $props();
 	let strain_a_name = $state(data.strain_a.name);
 	let strain_b_name = $state(data.strain_b.name);
 
 	const board_size = data.battle.arena_size;
-	type Cell = null | {
-		player: 'a' | 'b';
-		turn: number;
-	};
-	const board: Cell[][] = new Array(board_size)
-		.fill(null)
-		.map(() => new Array(board_size).fill(null));
-	board[0][0] = {
-		player: 'a',
-		turn: 0
-	};
-	board[board_size - 1][board_size - 1] = {
-		player: 'b',
-		turn: 0
-	};
-	for (const [index, move] of data.battle.log.entries()) {
-		const player = index % 2 === 0 ? 'a' : 'b';
-		board[move.y][move.x] = {
-			player,
-			turn: index + 1
-		};
-	}
-	let turn = $state(data.battle.log.length);
+	const log = data.battle.log;
+	let autoplay = $state(false);
 </script>
 
 <main>
@@ -38,9 +19,9 @@
 		<h3>
 			Winner:
 			{#if data.battle.winner === data.battle.strain_a}
-				{strain_a_name}
+				<span class="a">{strain_a_name}</span>
 			{:else}
-				{strain_b_name}
+				<span class="b">{strain_b_name}</span>
 			{/if}
 		</h3>
 	{:else}
@@ -50,21 +31,11 @@
 	<p>a: {data.battle.score_a}</p>
 	<p>b: {data.battle.score_b}</p>
 	<h3>Moves</h3>
-	<div class="grid">
-		{#each board as row}
-			<div class="row">
-				{#each row as cell}
-					<div class={`cell ${cell.turn <= turn && cell?.player}`}>
-						{#if cell && cell.turn <= turn}
-							{cell.player}
-						{/if}
-					</div>
-				{/each}
-			</div>
-		{/each}
-	</div>
-	<input type="range" min="0" max={data.battle.log.length} bind:value={turn} />
-	<p>Turn {turn} / {data.battle.log.length}</p>
+	<Board size={board_size} battle_log={log} {autoplay} singleplayer={false} />
+	<label>
+		<input type="checkbox" bind:checked={autoplay} />
+		autoplay
+	</label>
 	<!--
 	{#each data.battle.log as move}
 		<p>{JSON.stringify(move)}</p>
@@ -72,23 +43,6 @@
 </main>
 
 <style>
-	.grid {
-		display: grid;
-		gap: 1px;
-	}
-	.row {
-		display: flex;
-		gap: 1px;
-	}
-	.cell {
-		width: 20px;
-		height: 20px;
-		border: 1px solid #0004;
-
-		display: flex;
-		justify-content: center;
-		align-items: center;
-	}
 	.a {
 		color: #ff0000;
 		background-color: #ff00000f;

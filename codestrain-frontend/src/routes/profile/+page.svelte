@@ -1,15 +1,89 @@
 <script lang="ts">
+	import type { StrainInput, StrainOutput } from '$lib/common.js';
+	import Board from '$lib/components/board.svelte';
+	import createPlugin, { type Manifest } from '@extism/extism';
+
 	const { data } = $props();
+
+	const board_size = 10;
+
+	async function simulatePlugin(base64: string) {
+		const arrayBuffer = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+		const module = await WebAssembly.compile(arrayBuffer);
+		const plugin = await createPlugin(module, {
+			useWasi: true
+		});
+		console.log('plugin initialized', plugin);
+		let board: (boolean | null)[][] = new Array(board_size)
+			.fill(null)
+			.map(() => new Array(board_size).fill(null));
+		board[0][0] = true;
+		let log = [];
+		while (true) {
+			const empty = board
+				.map((row, y) => row.map((cell, x) => ({ x, y, cell })))
+				.flat()
+				.filter((cell) => cell.cell === null);
+			const occupied = board
+				.map((row, y) => row.map((cell, x) => ({ x, y, cell })))
+				.flat()
+				.filter((cell) => cell.cell !== null);
+			// Only allow moves that are directly adjacent to an occupied square (no diagonals)
+			const allowed = empty.filter((cell) =>
+				occupied.some(
+					(occupied) =>
+						(occupied.x === cell.x && Math.abs(occupied.y - cell.y) === 1) ||
+						(occupied.y === cell.y && Math.abs(occupied.x - cell.x) === 1)
+				)
+			);
+			if (allowed.length === 0) {
+				break;
+			}
+			let inputBoard: StrainInput['board'] = [];
+			for (let y = 0; y < board.length; y++) {
+				for (let x = 0; x < board[y].length; x++) {
+					inputBoard.push([[x, y], board[y][x]]);
+				}
+			}
+			const input: StrainInput = {
+				board: inputBoard,
+				allowed: allowed.map((cell) => [cell.x, cell.y])
+			};
+			const result = await plugin.call('take_turn', JSON.stringify(input));
+			if (!result) {
+				throw new Error('Plugin returned null');
+			}
+			const parsed: StrainOutput = JSON.parse(new TextDecoder().decode(result.buffer));
+			console.log('turn', parsed);
+			const [x, y] = parsed;
+			board[y][x] = true;
+			log.push({ x, y });
+		}
+		return log;
+	}
+	let simulationResult: { x: number; y: number }[] | null | { error: string } = $state(null);
 
 	let fileSelection: FileList | null = $state(null);
 	let wasmBase64: string | null = $state(null);
 	$effect(() => {
 		console.log('files', fileSelection);
 		if (fileSelection != null && fileSelection.length > 0) {
-			file2Base64(fileSelection[0]).then((base64) => {
-				wasmBase64 = base64;
-				console.log('wasmBase64', wasmBase64);
-			});
+			simulationResult = null;
+			file2Base64(fileSelection[0])
+				.then((base64) => {
+					wasmBase64 = base64;
+					console.log('wasmBase64', wasmBase64);
+					simulatePlugin(wasmBase64)
+						.then((result) => {
+							simulationResult = result;
+						})
+						.catch((error) => {
+							simulationResult = { error: error };
+						});
+				})
+				.catch((error) => {
+					simulationResult = { error: error };
+				});
 		} else {
 			wasmBase64 = null;
 		}
@@ -58,9 +132,23 @@
 			<input type="file" accept=".wasm" bind:files={fileSelection} />
 		</label>
 		{#if wasmBase64}
-			<p>WASM file selected.</p>
 			{#if fileSelection != null && fileSelection.length > 1}
 				<p>Note: You selected multiple files, but only the first one will be submitted!</p>
+			{/if}
+
+			{#if simulationResult === null}
+				<p>Simulating...</p>
+			{:else if 'error' in simulationResult}
+				<p>Simulation failed.</p>
+				<p>Error: {simulationResult.error}</p>
+			{:else if simulationResult !== null}
+				<p>Simulation finished.</p>
+				<Board
+					size={board_size}
+					battle_log={simulationResult}
+					autoplay={true}
+					singleplayer={true}
+				/>
 			{/if}
 		{/if}
 		<br />

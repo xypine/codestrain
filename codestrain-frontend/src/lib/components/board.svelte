@@ -52,7 +52,7 @@
 	{#each board as row, y}
 		<div class="row">
 			{#each row as cell, x}
-				<div class={`cell ${cell.turn <= turn && cell?.player}`}>
+				<div class={`cell ${cell?.turn <= turn && cell?.player}`}>
 					{#if cell && cell.turn <= turn}
 						{cell.player}
 					{/if}

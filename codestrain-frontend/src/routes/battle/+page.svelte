@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { invalidateAll } from '$app/navigation';
 	import { request_battle } from '$lib/backend.js';
 
 	const { data } = $props();
@@ -23,7 +24,7 @@
 			return 0;
 		});
 
-	const target_arena_size = 24;
+	const target_arena_size = 29;
 	const missing_combos = $state(
 		new Set(
 			data.strains
@@ -49,10 +50,12 @@
 		)
 	);
 	async function request_missing() {
-		for (const [a, b] of missing_combos) {
-			await request_battle(a.id, b.id, data.session);
-			missing_combos.delete([a, b]);
-		}
+		await Promise.all(
+			[...missing_combos].map(async ([a, b]) => {
+				await request_battle(a.id, b.id, data.session);
+				invalidateAll();
+			})
+		);
 		window.location.reload();
 	}
 </script>

@@ -684,12 +684,17 @@ async fn battle(
             .filter(|(_, v)| *v == Some(turn))
             .map(|(k, _)| *k)
             .collect::<Vec<_>>();
-        // Only allow moves that are directly adjacent to an occupied square (no diagonals) and are the same color
+        let _enemy = occupied
+            .iter()
+            .filter(|(_, v)| *v == Some(!turn))
+            .map(|(k, _)| *k)
+            .collect::<Vec<_>>();
+        // Only allow moves that are directly adjacent to an occupied square (with diagonals) and are the same color
         let mut allowed = empty
             .iter()
             .filter(|(x, y)| {
                 friendly.iter().any(|(ox, oy)| {
-                    (ox == x && (oy - y).abs() == 1) || (oy == y && (ox - x).abs() == 1)
+                    (x == ox && (y - oy).abs() == 1) || (y == oy && (x - ox).abs() == 1)
                 })
             })
             .map(|(x, y)| (*x, *y))

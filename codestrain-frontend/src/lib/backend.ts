@@ -4,6 +4,7 @@ export type User = {
     id: string;
     name: string;
     email: string;
+    admin: boolean;
     password?: string;
     created_at: string;
     updated_at: string;
@@ -41,7 +42,6 @@ export async function create_strain(name: string, description: string | null, co
         code,
         wasm
     };
-    console.log("body", body);
     const response = await fetch(`${BACKEND_URL}/strain`, {
         method: 'POST',
         headers: {
@@ -76,9 +76,9 @@ export type BattleMeta = {
 }
 export type BattleResult = BattleMeta & {
     log: {
+        player: boolean;
         x: number;
         y: number;
-        last: boolean;
         allowed: boolean;
     }[];
 }

@@ -5,4 +5,7 @@ members = [
     "codestrain-server",
     "example-strain/first_choice",
     "example-strain/random",
+    "example-strain/pathfinding",
+    "example-strain/fill",
+    "example-strain/fill-reverse",
 ]

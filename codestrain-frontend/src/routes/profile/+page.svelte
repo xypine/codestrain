@@ -7,6 +7,8 @@
 
 	const board_size = 10;
 
+	let strain_name: string = $state('');
+
 	async function simulatePlugin(base64: string) {
 		const arrayBuffer = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 		const module = await WebAssembly.compile(arrayBuffer);
@@ -69,6 +71,9 @@
 		console.log('files', fileSelection);
 		if (fileSelection != null && fileSelection.length > 0) {
 			simulationResult = null;
+			if (strain_name === '') {
+				strain_name = fileSelection[0].name.replace(/\.wasm$/, '');
+			}
 			file2Base64(fileSelection[0])
 				.then((base64) => {
 					wasmBase64 = base64;
@@ -124,7 +129,7 @@
 	<form method="POST" action="/strain">
 		<label>
 			Name
-			<input type="text" name="name" placeholder="Strain name" />
+			<input type="text" name="name" placeholder="Strain name" bind:value={strain_name} />
 		</label>
 		<br />
 		<label>

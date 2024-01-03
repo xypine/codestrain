@@ -21,7 +21,7 @@
 		turn: 0
 	};
 	for (const [index, move] of log.entries()) {
-		const player = singleplayer ? 'a' : index % 2 === 0 ? 'a' : 'b';
+		const player = singleplayer ? 'a' : move.player ? 'a' : 'b';
 		board[move.y][move.x] = {
 			player,
 			turn: index + 1
@@ -49,9 +49,9 @@
 </script>
 
 <div class="grid">
-	{#each board as row}
+	{#each board as row, y}
 		<div class="row">
-			{#each row as cell}
+			{#each row as cell, x}
 				<div class={`cell ${cell.turn <= turn && cell?.player}`}>
 					{#if cell && cell.turn <= turn}
 						{cell.player}

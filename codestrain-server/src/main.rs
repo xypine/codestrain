@@ -16,7 +16,10 @@ use thiserror::Error;
 use time::PrimitiveDateTime;
 use uuid::Uuid;
 
-use serde_with::serde_as;
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 
 #[derive(Database)]
 #[database("sqlx")]
@@ -29,6 +32,8 @@ type CoolerResult<T, E = rocket::response::Debug<sqlx::Error>> = std::result::Re
 struct User {
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     id: Option<Uuid>,
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    admin: Option<bool>,
     name: String,
     #[serde(skip_serializing)]
     password: String,
@@ -76,15 +81,25 @@ async fn new_user(
     mut db: Connection<Db>,
     mut new_user: Json<User>,
 ) -> Result<Created<Json<User>>, NewUserError> {
+    let admin = new_user.email == "elias@ruta.fi";
+
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2
+        .hash_password(new_user.password.as_bytes(), &salt)
+        .map_err(|_| NewUserError::InternalError)?
+        .to_string();
+
     let r = sqlx::query!(
         r#"
-        INSERT INTO users (name, password, email)
-        VALUES ($1, $2, $3)
+        INSERT INTO users (name, password, email, admin)
+        VALUES ($1, $2, $3, $4)
         RETURNING id
         "#,
         new_user.name,
-        new_user.password,
-        new_user.email
+        password_hash,
+        new_user.email,
+        admin
     )
     .fetch_optional(&mut **db)
     .await;
@@ -111,7 +126,7 @@ async fn users(mut db: Connection<Db>) -> CoolerResult<Json<Vec<User>>> {
     let users = sqlx::query_as!(
         User,
         r#"
-        SELECT id, name, email, password, created_at, updated_at
+        SELECT id, admin, name, email, password, created_at, updated_at
         FROM users
         ORDER BY id ASC
         "#
@@ -157,6 +172,8 @@ pub enum LoginError {
     DbErrorNewSession(sqlx::Error),
     #[error("Internal error")]
     DbError(#[from] sqlx::Error),
+    #[error("Internal error")]
+    LoadingPasswordHashFailed,
 }
 impl<'r, 'o: 'r> rocket::response::Responder<'r, 'o> for LoginError {
     fn respond_to(self, req: &'r rocket::Request<'_>) -> rocket::response::Result<'o> {
@@ -175,15 +192,14 @@ async fn login(
     mut db: Connection<Db>,
     credentials: Json<Login>,
 ) -> Result<Json<Session>, LoginError> {
-    // Validate user credentials
+    // Get user from db
     let r = sqlx::query!(
         r#"
         SELECT id, name, email, password, created_at, updated_at
         FROM users
-        WHERE email = $1 AND password = $2
+        WHERE email = $1
         "#,
-        credentials.email,
-        credentials.password
+        credentials.email
     )
     .fetch_optional(&mut **db)
     .await
@@ -191,6 +207,13 @@ async fn login(
 
     match r {
         Some(user) => {
+            // Validate user credentials
+            let parsed_hash = PasswordHash::new(&user.password)
+                .map_err(|_| LoginError::LoadingPasswordHashFailed)?;
+            Argon2::default()
+                .verify_password(credentials.password.as_bytes(), &parsed_hash)
+                .map_err(|_| LoginError::InvalidCredentials)?;
+
             // delete old sessions
             sqlx::query!(
                 r#"
@@ -310,7 +333,7 @@ async fn get_user_from_token(db: &mut Connection<Db>, token: &str) -> Option<Use
     let r = sqlx::query_as!(
         User,
         r#"
-        SELECT users.id, users.name, users.email, users.password, users.created_at, users.updated_at
+        SELECT users.id, users.admin, users.name, users.email, users.password, users.created_at, users.updated_at
         FROM users
         INNER JOIN sessions ON sessions.user_id = users.id
         WHERE sessions.token = $1 AND sessions.expires_at > NOW()
@@ -494,9 +517,9 @@ struct BattleResult {
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(crate = "rocket::serde")]
 struct BattleLog {
+    player: bool,
     x: i32,
     y: i32,
-    last: bool,
     allowed: bool,
 }
 
@@ -525,11 +548,14 @@ async fn battle(
     battle_request: Json<BattleRequest>,
     auth: Credential<OAuth>,
 ) -> CoolerResult<Json<BattleResult>> {
-    const BOARD_SIZE: usize = 10;
+    const BOARD_SIZE: usize = 24;
     let user = get_user_from_token(&mut db, &auth.token)
         .await
         .ok_or(LoginError::InvalidCredentials)
         .expect("Invalid credentials");
+    if !user.admin.unwrap() {
+        panic!("User is not admin");
+    }
     let battle_id = Uuid::new_v4();
     println!(
         "battle{battle_id}| user {} requested a battle between {} and {}",
@@ -549,6 +575,29 @@ async fn battle(
     )
     .fetch_optional(&mut **db)
     .await?;
+    if let Some(old) = row {
+        println!("battle{battle_id}| Battle already exists, deleting the old one");
+        sqlx::query!(
+            r#"
+            DELETE FROM battles
+            WHERE id = $1
+            "#,
+            old.id
+        )
+        .execute(&mut **db)
+        .await?;
+        sqlx::query!(
+            r#"
+            DELETE FROM battle_logs
+            WHERE battle_id = $1
+            "#,
+            old.id
+        )
+        .execute(&mut **db)
+        .await?;
+    }
+
+    /*
     if let Some(row) = row {
         println!("battle{battle_id}| Battle already exists");
         let log = sqlx::query_as!(
@@ -574,7 +623,7 @@ async fn battle(
             score_b: row.score_b,
             log,
         }));
-    }
+    } */
     println!("battle{battle_id}| Loading strain versions");
     let strain_a = get_latest_strain_version(&mut db, battle_request.strain_a).await?;
     let strain_b = get_latest_strain_version(&mut db, battle_request.strain_b).await?;
@@ -630,20 +679,18 @@ async fn battle(
             .filter(|(_, v)| v.is_some())
             .map(|(k, v)| (*k, *v))
             .collect::<Vec<_>>();
+        let friendly = occupied
+            .iter()
+            .filter(|(_, v)| *v == Some(turn))
+            .map(|(k, _)| *k)
+            .collect::<Vec<_>>();
         // Only allow moves that are directly adjacent to an occupied square (no diagonals) and are the same color
         let mut allowed = empty
             .iter()
             .filter(|(x, y)| {
-                occupied
-                    .iter()
-                    .filter(|(_, v)| *v == Some(turn))
-                    .any(|((ox, oy), _)| {
-                        false
-                            || (ox == &(x - 1) && oy == y)
-                            || (ox == &(x + 1) && oy == y)
-                            || (ox == x && oy == &(y - 1))
-                            || (ox == x && oy == &(y + 1))
-                    })
+                friendly.iter().any(|(ox, oy)| {
+                    (ox == x && (oy - y).abs() == 1) || (oy == y && (ox - x).abs() == 1)
+                })
             })
             .map(|(x, y)| (*x, *y))
             .collect::<Vec<_>>();
@@ -699,13 +746,13 @@ async fn battle(
         };
 
         if allowed.contains(&response) {
-            log.push((corrected_response, true));
+            log.push((corrected_response, turn, true));
             board
                 .iter_mut()
                 .filter(|(k, _)| *k == response)
                 .for_each(|(_, v)| *v = Some(turn));
         } else {
-            log.push((corrected_response, false));
+            log.push((corrected_response, turn, false));
             winner = Some(if turn {
                 strain_b.id.unwrap()
             } else {
@@ -741,11 +788,10 @@ async fn battle(
     // save to db
     let log = log
         .iter()
-        .enumerate()
-        .map(|(i, ((x, y), allowed))| BattleLog {
+        .map(|((x, y), player, allowed)| BattleLog {
+            player: *player,
             x: *x as i32,
             y: *y as i32,
-            last: i == log.len() - 1,
             allowed: *allowed,
         })
         .collect::<Vec<_>>();
@@ -767,14 +813,14 @@ async fn battle(
     for (turn, log_entry) in log.iter().enumerate() {
         sqlx::query!(
             r#"
-            INSERT INTO battle_logs (battle_id, turn, move_x, move_y, last, allowed)
+            INSERT INTO battle_logs (battle_id, turn, move_x, move_y, player, allowed)
             VALUES ($1, $2, $3, $4, $5, $6)
             "#,
             battle_id,
             turn as i32,
             log_entry.x,
             log_entry.y,
-            log_entry.last,
+            log_entry.player,
             log_entry.allowed,
         )
         .execute(&mut **db)
@@ -812,7 +858,7 @@ async fn get_battle(
     let log = sqlx::query_as!(
         BattleLog,
         r#"
-        SELECT move_x AS x, move_y AS y, last, allowed
+        SELECT move_x AS x, move_y AS y, allowed, player
         FROM battle_logs
         WHERE battle_id = $1
         ORDER BY turn ASC

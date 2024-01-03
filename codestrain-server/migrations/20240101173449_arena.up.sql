@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS battle_logs (
     turn INT NOT NULL,
     move_x INT NOT NULL,
     move_y INT NOT NULL,
-    last boolean NOT NULL,
+    player boolean NOT NULL,
     allowed boolean NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     PRIMARY KEY (battle_id, turn)

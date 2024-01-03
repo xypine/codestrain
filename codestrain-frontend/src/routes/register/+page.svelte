@@ -6,6 +6,10 @@
 {#if form?.message}
 	<p class:error={form.error}>{form?.message}</p>
 {/if}
+<p>
+	Note: For now details other than the password are public, so if you don't want to share your email
+	address, use a fake one.
+</p>
 <form method="post">
 	<label>
 		Name

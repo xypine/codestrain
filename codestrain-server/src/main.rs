@@ -542,6 +542,69 @@ async fn get_latest_strain_version(
     Ok(strain)
 }
 
+async fn process_turn(
+    battle_id: Uuid,
+    board: &Vec<((i32, i32), Option<bool>)>,
+    plugin: &mut Plugin,
+) -> Option<(i32, i32)> {
+    let empty = board
+        .iter()
+        .filter(|(_, v)| v.is_none())
+        .map(|(k, _)| *k)
+        .collect::<Vec<_>>();
+    let occupied = board
+        .iter()
+        .filter(|(_, v)| v.is_some())
+        .map(|(k, v)| (*k, *v))
+        .collect::<Vec<_>>();
+    let friendly = occupied
+        .iter()
+        .filter(|(_, v)| *v == Some(true))
+        .map(|(k, _)| *k)
+        .collect::<Vec<_>>();
+    let _enemy = occupied
+        .iter()
+        .filter(|(_, v)| *v == Some(false))
+        .map(|(k, _)| *k)
+        .collect::<Vec<_>>();
+    // Only allow moves that are directly adjacent to an occupied square (with diagonals) and are the same color
+    let allowed = empty
+        .iter()
+        .filter(|(x, y)| {
+            friendly.iter().any(|(ox, oy)| {
+                (x == ox && (y - oy).abs() == 1) || (y == oy && (x - ox).abs() == 1)
+            })
+        })
+        .map(|(x, y)| (*x, *y))
+        .collect::<Vec<_>>();
+    /*
+    println!(
+        "battle{battle_id}| Turn: {}, Allowed moves: {:?}, Occupied: {:?}",
+        if turn { "A" } else { "B" },
+        allowed,
+        occupied
+    ); */
+    if allowed.len() == 0 {
+        return None;
+    }
+
+    let input = StrainInput {
+        board: board.clone(),
+        allowed: allowed.clone(),
+    };
+    let extism::convert::Json(response) = plugin
+        .call::<extism::convert::Json<StrainInput>, extism::convert::Json<StrainOutput>>(
+            "take_turn",
+            extism::convert::Json(input),
+        )
+        .expect("Failed to call plugin");
+    if !allowed.contains(&response) {
+        println!("battle{battle_id}| Invalid move: {:?}", response);
+        return None;
+    }
+    Some(response)
+}
+
 #[rocket::post("/battle", data = "<battle_request>")]
 async fn battle(
     mut db: Connection<Db>,
@@ -660,135 +723,101 @@ async fn battle(
         }
     }
 
-    let mut winner: Option<Uuid> = None;
     let mut log = vec![];
 
     // true = player a
     // false = player b
     let mut turn = false;
     let mut skips = 0;
-    loop {
+    const MOVES_PER_TURN: usize = 5;
+    'outer: loop {
         turn = !turn;
-        let empty = board
-            .iter()
-            .filter(|(_, v)| v.is_none())
-            .map(|(k, _)| *k)
-            .collect::<Vec<_>>();
-        let occupied = board
-            .iter()
-            .filter(|(_, v)| v.is_some())
-            .map(|(k, v)| (*k, *v))
-            .collect::<Vec<_>>();
-        let friendly = occupied
-            .iter()
-            .filter(|(_, v)| *v == Some(turn))
-            .map(|(k, _)| *k)
-            .collect::<Vec<_>>();
-        let _enemy = occupied
-            .iter()
-            .filter(|(_, v)| *v == Some(!turn))
-            .map(|(k, _)| *k)
-            .collect::<Vec<_>>();
-        // Only allow moves that are directly adjacent to an occupied square (with diagonals) and are the same color
-        let mut allowed = empty
-            .iter()
-            .filter(|(x, y)| {
-                friendly.iter().any(|(ox, oy)| {
-                    (x == ox && (y - oy).abs() == 1) || (y == oy && (x - ox).abs() == 1)
-                })
-            })
-            .map(|(x, y)| (*x, *y))
-            .collect::<Vec<_>>();
-        if !turn {
-            allowed.reverse();
-        }
-        println!(
-            "battle{battle_id}| Turn: {}, Allowed moves: {:?}",
-            if turn { "A" } else { "B" },
-            allowed
-        );
-        if allowed.len() == 0 {
-            if skips == 1 {
-                println!("battle{battle_id}| Both players skipped, ending game");
+        for _ in 0..MOVES_PER_TURN {
+            // rotate the board so that the active player is always at the top left
+            // this way the plugin doesn't have to worry about the board rotation
+            // also change the mappings so that friendly cells are always true and enemy cells are always false
+            let board_copy = if turn {
+                board.clone()
+            } else {
+                board
+                    .iter()
+                    .map(|((x, y), v)| {
+                        (
+                            ((BOARD_SIZE as i32 - 1) - y, (BOARD_SIZE as i32 - 1) - x),
+                            v.map(|v| if turn { v } else { !v }),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            // (0, 0) should always be true
+            if !board_copy
+                .iter()
+                .any(|((x, y), v)| *x == 0 && *y == 0 && *v == Some(true))
+            {
+                // something extremely weird happened
+                println!(
+                    "battle{battle_id}| Something weird happened ((0,0) != true), ending game"
+                );
+                println!(
+                    "battle{battle_id}| Board: {:?}",
+                    board_copy
+                        .iter()
+                        .filter(|(_, v)| v.is_some())
+                        .map(|((x, y), v)| (*x, *y, v.unwrap()))
+                        .collect::<Vec<_>>()
+                );
                 break;
             }
-            // rotate the board so that the active player is always at the top left
-            board = board
-                .iter()
-                .map(|((x, y), v)| {
+
+            let active_player = if turn { &mut plugin_a } else { &mut plugin_b };
+            let response = process_turn(battle_id, &board_copy, active_player).await;
+
+            if let Some(response) = response {
+                // rotate the response so that it matches the original board
+                let corrected_response: StrainOutput = if !turn {
                     (
-                        ((BOARD_SIZE as i32 - 1) - y, (BOARD_SIZE as i32 - 1) - x),
-                        *v,
+                        (BOARD_SIZE as i32 - 1) - response.1,
+                        (BOARD_SIZE as i32 - 1) - response.0,
                     )
-                })
-                .collect::<Vec<_>>();
-            skips += 1;
-            continue;
-        }
-        skips = 0;
-        let active_player = if turn { &mut plugin_a } else { &mut plugin_b };
-        let input = StrainInput {
-            board: board.clone(),
-            allowed: allowed.clone(),
-        };
-        //let json = serde_json::to_string(&input).expect("Failed to serialize input");
-        //println!("battle{battle_id}| Sending input to plugin: {}", json);
-        let extism::convert::Json(response) = active_player
-            .call::<extism::convert::Json<StrainInput>, extism::convert::Json<StrainOutput>>(
-                "take_turn",
-                extism::convert::Json(input),
-            )
-            .expect("Failed to call plugin");
-
-        // rotate the response so that it matches the original board
-        let corrected_response: StrainOutput = if !turn {
-            (
-                (BOARD_SIZE as i32 - 1) - response.1,
-                (BOARD_SIZE as i32 - 1) - response.0,
-            )
-        } else {
-            response
-        };
-
-        if allowed.contains(&response) {
-            log.push((corrected_response, turn, true));
-            board
-                .iter_mut()
-                .filter(|(k, _)| *k == response)
-                .for_each(|(_, v)| *v = Some(turn));
-        } else {
-            log.push((corrected_response, turn, false));
-            winner = Some(if turn {
-                strain_b.id.unwrap()
+                } else {
+                    response
+                };
+                println!(
+                    "battle{battle_id}| Player {} made the move {:?} -> {:?}",
+                    if turn { "A" } else { "B" },
+                    response,
+                    corrected_response
+                );
+                log.push((corrected_response, turn, true));
+                board
+                    .iter_mut()
+                    .filter(|(k, _)| *k == corrected_response)
+                    .for_each(|(_, v)| *v = Some(turn));
+                skips = 0;
             } else {
-                strain_a.id.unwrap()
-            });
-            break;
+                println!(
+                    "battle{battle_id}| No moves available, skipping turn ({} skips in total)",
+                    skips
+                );
+                skips += 1;
+                if skips >= 2 * MOVES_PER_TURN {
+                    println!("battle{battle_id}| Both players skipped, ending game");
+                    break 'outer;
+                }
+                continue;
+            }
         }
-
-        // rotate the board so that the active player is always at the top left
-        board = board
-            .iter()
-            .map(|((x, y), v)| {
-                (
-                    ((BOARD_SIZE as i32 - 1) - y, (BOARD_SIZE as i32 - 1) - x),
-                    *v,
-                )
-            })
-            .collect::<Vec<_>>();
     }
 
     let score_a = board.iter().filter(|(_, v)| *v == Some(true)).count() as i32;
     let score_b = board.iter().filter(|(_, v)| *v == Some(false)).count() as i32;
-    let winner = winner.or_else(|| {
-        if score_a > score_b {
-            Some(strain_a.id.unwrap())
-        } else if score_b > score_a {
-            Some(strain_b.id.unwrap())
-        } else {
-            None
-        }
-    });
+    let winner = if score_a > score_b {
+        Some(strain_a.id.unwrap())
+    } else if score_b > score_a {
+        Some(strain_b.id.unwrap())
+    } else {
+        None
+    };
 
     // save to db
     let log = log

@@ -8,4 +8,5 @@ members = [
     "example-strain/pathfinding",
     "example-strain/fill",
     "example-strain/fill-reverse",
+    "example-strain/thefinnishvariant",
 ]

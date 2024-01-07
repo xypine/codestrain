@@ -24,7 +24,7 @@
 			return 0;
 		});
 
-	const target_arena_size = 29;
+	const target_arena_size = 24;
 	const missing_combos = $state(
 		new Set(
 			data.strains
@@ -55,6 +55,16 @@
 				await request_battle(a.id, b.id, data.session);
 				invalidateAll();
 			})
+		);
+		window.location.reload();
+	}
+	async function request_all() {
+		await Promise.all(
+			data.strains.flatMap((a) =>
+				data.strains.map((b) => {
+					return request_battle(a.id, b.id, data.session);
+				})
+			)
 		);
 		window.location.reload();
 	}
@@ -144,6 +154,7 @@
 	{/if}
 	<p>
 		<button on:click={request_missing}>Request all missing</button>
+		<button on:click={request_all}>(Re)request all</button>
 	</p>
 {:else}
 	<p>If you want to request a new battle, please contact an admin.</p>

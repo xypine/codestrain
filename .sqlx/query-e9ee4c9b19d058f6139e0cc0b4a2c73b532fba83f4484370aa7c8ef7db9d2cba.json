@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT move_x AS x, move_y AS y, allowed, player\n        FROM battle_logs\n        WHERE battle_id = $1\n        ORDER BY turn ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "x",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "y",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "allowed",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "player",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e9ee4c9b19d058f6139e0cc0b4a2c73b532fba83f4484370aa7c8ef7db9d2cba"
+}

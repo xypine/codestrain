@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, arena_size, strain_a, strain_b, winner, score_a, score_b\n        FROM battles\n        WHERE strain_a = $1 AND strain_b = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "arena_size",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "strain_a",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "strain_b",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "winner",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "score_a",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "score_b",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "8c8a2b5b8e5dfa7f8b6d0e401541f2e925ccde198ba92113ae992d6f0d6af1d6"
+}

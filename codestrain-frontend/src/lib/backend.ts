@@ -1,5 +1,5 @@
-import { env } from '$env/dynamic/private';
-export const BACKEND_URL = env.BACKEND_URL || 'http://localhost:8000';
+import { env } from '$env/dynamic/public';
+export const BACKEND_URL = env.PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
 export type User = {
     id: string;
